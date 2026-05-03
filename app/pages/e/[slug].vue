@@ -22,7 +22,7 @@
           <p class="text-muted-foreground text-xs">付款人：{{ payer?.name }}</p>
         </div>
         <div class="flex gap-2">
-          <Button size="sm" variant="outline" @click="showSettingsDialog = true">設定</Button>
+          <Button size="sm" variant="outline" @click="openSettings">設定</Button>
           <Button size="sm" :disabled="!myMemberId" @click="showAddItemDialog = true">
             + 新增項目
           </Button>
@@ -37,11 +37,22 @@
             <tr class="border-b">
               <!-- 項目欄（固定左） -->
               <th class="sticky left-0 z-20 bg-background text-left px-4 py-2 min-w-[160px] font-medium text-muted-foreground">
-                項目 / 金額
+                <div class="flex items-center justify-between w-full">
+                  <span>項目 / 金額</span>
+                  <button
+                    v-if="myMemberId"
+                    class="text-muted-foreground hover:text-primary text-base leading-none"
+                    @click="showAddItemDialog = true"
+                  >+</button>
+                </div>
               </th>
               <!-- 我的欄（固定左第二） -->
-              <th class="sticky left-[160px] z-20 bg-background px-3 py-2 w-16 text-center font-medium text-primary text-xs border-r border-dashed">
-                {{ myMember?.name ?? '我' }}
+              <th class="sticky left-[160px] z-20 bg-background px-3 py-2 w-24 text-center font-medium text-primary text-xs border-r border-dashed cursor-pointer select-none"
+                @click="cycleSortMode" :title="{ created: '建立順序', mine: '我有勾的在上面', amount: '金額多的在上面' }[sortMode]">
+                <div class="flex items-center justify-center gap-1">
+                  <span>{{ myMember?.name ?? '我' }}</span>
+                  <span class="text-muted-foreground" style="font-size:9px">{{ sortLabels[sortMode] }}</span>
+                </div>
               </th>
               <!-- 其他成員 -->
               <th
@@ -379,7 +390,7 @@
           <div class="space-y-1">
             <Label>分享連結</Label>
             <div class="flex gap-2">
-              <Input :value="shareUrl" readonly class="text-xs text-muted-foreground" />
+              <input :value="shareUrl" readonly class="flex-1 border rounded px-2 py-1 text-xs text-muted-foreground bg-muted w-full" />
               <Button size="sm" variant="outline" @click="copyLink">
                 {{ copied ? '已複製' : '複製' }}
               </Button>
@@ -774,12 +785,33 @@ const currentRoll = ref<number | null>(null)
 const currentRollPct = ref(20)
 const justConfirmed = ref(false)  // 剛確認完，等待決定要不要再骰
 const copied = ref(false)
-const shareUrl = computed(() => event.value ? `${window.location.origin}/e/${event.value.slug}` : '')
+const shareUrl = ref('')
 
-async function copyLink() {
-  await navigator.clipboard.writeText(shareUrl.value)
-  copied.value = true
-  setTimeout(() => copied.value = false, 2000)
+function openSettings() {
+  const origin = window.location.origin
+  shareUrl.value = `${origin}/e/${event.value?.slug ?? slug}`
+  console.log('shareUrl:', shareUrl.value)
+  showSettingsDialog.value = true
+}
+
+function copyLink() {
+  try {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareUrl.value)
+    } else {
+      // fallback for non-HTTPS
+      const el = document.createElement('textarea')
+      el.value = shareUrl.value
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+    }
+    copied.value = true
+    setTimeout(() => copied.value = false, 2000)
+  } catch {
+    toast.error('複製失敗，請手動複製')
+  }
 }
 const selectedParent = ref<any>(null)
 
@@ -799,7 +831,21 @@ const childForm = reactive({ title: '', amount: '' })
 const payer = computed(() => members.value.find(m => m.id === event.value?.payer_member_id))
 const myMember = computed(() => members.value.find(m => m.id === myMemberId.value))
 const otherMembers = computed(() => members.value.filter(m => m.id !== myMemberId.value))
-const parentItems = computed(() => items.value.filter(i => !i.parent_item_id))
+const parentItems = computed(() => {
+  const parents = items.value.filter(i => !i.parent_item_id)
+  if (sortMode.value === 'created') return parents
+  if (sortMode.value === 'mine') {
+    return [...parents].sort((a, b) => {
+      const aHas = childrenOf(a.id).some(c => isParticipating(c.id)) || isParticipating(a.id) ? 1 : 0
+      const bHas = childrenOf(b.id).some(c => isParticipating(c.id)) || isParticipating(b.id) ? 1 : 0
+      return bHas - aHas
+    })
+  }
+  if (sortMode.value === 'amount') {
+    return [...parents].sort((a, b) => Number(b.amount) - Number(a.amount))
+  }
+  return parents
+})
 
 const childActualPreview = computed(() => {
   if (!selectedParent.value || !childForm.amount) return 0
@@ -1267,6 +1313,14 @@ async function saveSettings() {
 }
 
 const myMember_ = computed(() => members.value.find(m => m.id === myMemberId.value))
+const sortMode = ref<'created' | 'mine' | 'amount'>('created')
+const sortLabels = { created: '↕', mine: '✓↑', amount: '$↑' }
+
+function cycleSortMode() {
+  const modes: Array<'created' | 'mine' | 'amount'> = ['created', 'mine', 'amount']
+  const idx = modes.indexOf(sortMode.value)
+  sortMode.value = modes[(idx + 1) % modes.length]
+}
 const rollsUsed = computed(() => myMember_.value?.rolls_used ?? 0)
 const maxRolls = computed(() => event.value?.random_amount_rolls ?? 1)
 const rollsLeft = computed(() => Math.max(0, maxRolls.value - rollsUsed.value))
